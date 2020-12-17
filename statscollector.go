@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/florentchauveau/go-kamailio-binrpc/v2"
+	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
@@ -44,6 +44,11 @@ var (
 		"kamailio_shm_fragments",
 		"Shared memory fragment count",
 		[]string{}, nil)
+
+	pkgmem_bytes = prometheus.NewDesc(
+		"kamailio_pkg_bytes",
+		"Private memory",
+		[]string{"index", "pid", "rank", "type"}, nil)
 
 	dns_failed = prometheus.NewDesc(
 		"kamailio_dns_failed_request_total",
@@ -111,6 +116,18 @@ var (
 		[]string{"type"}, nil)
 )
 
+// MemoryEntry is a struct to store PKG memory values
+type MemoryEntry struct {
+	Entry      string
+	Pid        string
+	Rank       string
+	Used       string
+	Free       string
+	RealUsed   string
+	TotalSize  string
+	TotalFrags string
+}
+
 // the actual Collector object
 type StatsCollector struct {
 	cliContext   *cli.Context
@@ -144,26 +161,40 @@ func (c *StatsCollector) Describe(descriptionChannel chan<- *prometheus.Desc) {
 
 // part of the prometheus.Collector interface
 func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
+
+	// read PKG memory stats from Kamailio
+	log.Debug("Fetching PKG memory stats....")
+	memStatMap, err := c.fetchPKGMemStats()
+	if err == nil {
+		// and produce prometheus.Metric
+		log.Debug("Pushing metrics of memory stats....")
+		producePKGMemMetrics(memStatMap, metricChannel)
+	} else {
+		// something went wrong
+		// TODO: add a error metric
+		log.Error("Could not fetch PKG memory stats values from kamailio: ", err)
+	}
+
 	// read all stats from Kamailio
-	if completeStatMap, err := c.fetchStats(); err == nil {
+	log.Debug("Fetching stats from statistics module....")
+	completeStatMap, err := c.fetchStats()
+	if err == nil {
+		log.Debug("Pushing metrics of standard stats....")
 		// and produce various prometheus.Metric for well-known stats
 		produceMetrics(completeStatMap, metricChannel)
+		log.Debug("Pushing metrics of scripted stats....")
 		// produce prometheus.Metric objects for scripted stats (if any)
 		convertScriptedMetrics(completeStatMap, metricChannel)
 	} else {
 		// something went wrong
 		// TODO: add a error metric
-		log.Error("Could not fetch values from kamailio", err)
+		log.Error("Could not fetch values from kamailio: ", err)
 	}
+
 }
 
-// connect to Kamailio and perform a "stats.fetch" rpc call
-// result is a flat key=>value map
-func (c *StatsCollector) fetchStats() (map[string]string, error) {
-
-	// TODO measure rpc time
-	//timer := prometheus.NewTimer(rpc_request_duration)
-	//defer timer.ObserveDuration()
+func (c *StatsCollector) execRPCCommand(command string, param string) ([]binrpc.Record, error) {
+	log.Debug("Gonna send request following command to Kamailio: ", command, param)
 
 	// establish connection to Kamailio server
 	var err error
@@ -177,6 +208,7 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 		conn, err = net.Dial("tcp", address)
 	}
 	if err != nil {
+		log.Error("Error while establishing connection to Kamailio")
 		return nil, err
 	}
 	defer conn.Close()
@@ -184,8 +216,14 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
 
 	// WritePacket returns the cookie generated
-	cookie, err := binrpc.WritePacket(conn, "stats.fetch", "all")
+	var cookie []byte
+	if param == "" {
+		cookie, err = binrpc.WritePacket(conn, command)
+	} else {
+		cookie, err = binrpc.WritePacket(conn, command, param)
+	}
 	if err != nil {
+		log.Error("Error while sending request to Kamailio")
 		return nil, err
 	}
 
@@ -193,9 +231,76 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// we receive records in response
 	records, err := binrpc.ReadPacket(conn, cookie)
 	if err != nil {
+		log.Error("Error while reading response from Kamailio")
 		return nil, err
 	}
 
+	log.Debug("Got response from Kamailio for request: ", command)
+	return records, nil
+}
+
+func (c *StatsCollector) fetchPKGMemStats() ([]MemoryEntry, error) {
+	records, err := c.execRPCCommand("pkg.stats", "")
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("Got %d records", len(records))
+	// convert the structure into a MemoryEntry
+	var result = []MemoryEntry{}
+
+	for _, record := range records {
+		m := MemoryEntry{}
+		// a record is a memory entry
+		items, _ := record.StructItems()
+		log.Debugf("Got %d items for this record", len(items))
+		for _, item := range items {
+			log.Debugf("Dealing with key: %s", item.Key)
+			intRes, err := item.Value.Int()
+			if err != nil {
+				log.Errorf("Was not able to convert value to string for key: %s. Ignoring.", item.Key)
+				continue
+			}
+			value := strconv.Itoa(intRes)
+			switch item.Key {
+			case "entry":
+				m.Entry = value
+			case "pid":
+				m.Pid = value
+			case "rank":
+				m.Rank = value
+			case "used":
+				m.Used = value
+			case "free":
+				m.Free = value
+			case "real_used":
+				m.RealUsed = value
+			case "total_size":
+				m.TotalSize = value
+			case "total_frags":
+				m.TotalFrags = value
+			}
+		}
+		result = append(result, m)
+	}
+
+	return result, nil
+}
+
+// connect to Kamailio and perform a "stats.fetch" rpc call
+// result is a flat key=>value map
+func (c *StatsCollector) fetchStats() (map[string]string, error) {
+
+	// TODO measure rpc time
+	//timer := prometheus.NewTimer(rpc_request_duration)
+	//defer timer.ObserveDuration()
+
+	records, err := c.execRPCCommand("stats.fetch", "all")
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("Mapping received response: %s", records)
 	// convert the structure into a simple key=>value map
 	items, _ := records[0].StructItems()
 	result := make(map[string]string)
@@ -205,6 +310,50 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	}
 
 	return result, nil
+}
+
+func producePKGMemMetrics(memStatMap []MemoryEntry, metricChannel chan<- prometheus.Metric) {
+
+	for _, e := range memStatMap {
+		//Labels
+		labelValues := []string{
+			// entry - pid - rank - type
+			e.Entry,
+			e.Pid,
+			e.Rank,
+		}
+		labelUsed := append(labelValues, "used")
+		labelFree := append(labelValues, "free")
+		labelRealUsed := append(labelValues, "real_used")
+		labelTotal := append(labelValues, "total")
+		labelFrags := append(labelValues, "total_frags")
+
+		//Values
+		convertPKGStatToMetric(e.Used, labelUsed, metricChannel)
+		convertPKGStatToMetric(e.Free, labelFree, metricChannel)
+		convertPKGStatToMetric(e.RealUsed, labelRealUsed, metricChannel)
+		convertPKGStatToMetric(e.TotalSize, labelTotal, metricChannel)
+		convertPKGStatToMetric(e.TotalFrags, labelFrags, metricChannel)
+
+	}
+}
+
+func convertPKGStatToMetric(value string, labels []string, metricChannel chan<- prometheus.Metric) {
+	if valueFloat, err := strconv.ParseFloat(value, 64); err == nil {
+		metric, err := prometheus.NewConstMetric(
+			pkgmem_bytes,
+			prometheus.GaugeValue,
+			valueFloat,
+			labels...,
+		)
+		if err == nil {
+			// handover the metric to prometheus api
+			metricChannel <- metric
+		} else {
+			// or skip and complain
+			log.Warnf("Could not convert stat value [%s]: %s", value, err)
+		}
+	}
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
