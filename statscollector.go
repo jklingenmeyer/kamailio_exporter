@@ -15,106 +15,122 @@ import (
 // declare a series of prometheus metric descriptions
 // we can reuse them for each scrape
 var (
+	constLabels prometheus.Labels
+	core_request_total, core_rcv_request_total, core_reply_total, core_rcv_reply_total,
+	shmem_bytes, shmem_fragments, pkgmem_bytes,
+	dns_failed,
+	bad_uri, bad_msg_hdr,
+	sl_reply_total, sl_type_total,
+	tcp_total, tcp_connections, tcp_writequeue,
+	tmx_code_total, tmx_type_total, tmx, tmx_rpl_total,
+	dialog *prometheus.Desc
+)
+
+func initMetrics(labels prometheus.Labels) {
+	constLabels = labels
+
 	core_request_total = prometheus.NewDesc(
 		"kamailio_core_request_total",
 		"Request counters",
-		[]string{"method"}, nil)
+		[]string{"method"}, constLabels)
 
 	core_rcv_request_total = prometheus.NewDesc(
 		"kamailio_core_rcv_request_total",
 		"Received requests by method",
-		[]string{"method"}, nil)
+		[]string{"method"}, constLabels)
 
 	core_reply_total = prometheus.NewDesc(
 		"kamailio_core_reply_total",
 		"Reply counters",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	core_rcv_reply_total = prometheus.NewDesc(
 		"kamailio_core_rcv_reply_total",
 		"Received replies by code",
-		[]string{"code"}, nil)
+		[]string{"code"}, constLabels)
 
 	shmem_bytes = prometheus.NewDesc(
 		"kamailio_shm_bytes",
 		"Shared memory sizes",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	shmem_fragments = prometheus.NewDesc(
 		"kamailio_shm_fragments",
 		"Shared memory fragment count",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	pkgmem_bytes = prometheus.NewDesc(
 		"kamailio_pkg_bytes",
 		"Private memory",
-		[]string{"index", "pid", "rank", "type"}, nil)
+		[]string{"index", "pid", "rank", "type"}, constLabels)
 
 	dns_failed = prometheus.NewDesc(
 		"kamailio_dns_failed_request_total",
 		"Failed dns requests",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	bad_uri = prometheus.NewDesc(
 		"kamailio_bad_uri_total",
 		"Messages with bad uri",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	bad_msg_hdr = prometheus.NewDesc(
 		"kamailio_bad_msg_hdr",
 		"Messages with bad message header",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	sl_reply_total = prometheus.NewDesc(
 		"kamailio_sl_reply_total",
 		"Stateless replies by code",
-		[]string{"code"}, nil)
+		[]string{"code"}, constLabels)
 
 	sl_type_total = prometheus.NewDesc(
 		"kamailio_sl_type_total",
 		"Stateless replies by type",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	tcp_total = prometheus.NewDesc(
 		"kamailio_tcp_total",
 		"TCP connection counters",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	tcp_connections = prometheus.NewDesc(
 		"kamailio_tcp_connections",
 		"Opened TCP connections",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	tcp_writequeue = prometheus.NewDesc(
 		"kamailio_tcp_writequeue",
 		"TCP write queue size",
-		[]string{}, nil)
+		[]string{}, constLabels)
 
 	tmx_code_total = prometheus.NewDesc(
 		"kamailio_tmx_code_total",
 		"Completed Transaction counters by code",
-		[]string{"code"}, nil)
+		[]string{"code"}, constLabels)
 
 	tmx_type_total = prometheus.NewDesc(
 		"kamailio_tmx_type_total",
 		"Completed Transaction counters by type",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	tmx = prometheus.NewDesc(
 		"kamailio_tmx",
 		"Ongoing Transactions",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	tmx_rpl_total = prometheus.NewDesc(
 		"kamailio_tmx_rpl_total",
 		"Tmx reply counters",
-		[]string{"type"}, nil)
+		[]string{"type"}, constLabels)
 
 	dialog = prometheus.NewDesc(
 		"kamailio_dialog",
 		"Ongoing Dialogs",
-		[]string{"type"}, nil)
-)
+		[]string{"type"}, constLabels)
+
+	return
+}
 
 // MemoryEntry is a struct to store PKG memory values
 type MemoryEntry struct {
@@ -504,7 +520,7 @@ func convertScriptedMetrics(data map[string]string, prom chan<- prometheus.Metri
 				valueType = prometheus.GaugeValue
 			}
 			// create a metric description on the fly
-			description := prometheus.NewDesc("kamailio_"+metricName, "Scripted metric "+metricName, []string{}, nil)
+			description := prometheus.NewDesc("kamailio_"+metricName, "Scripted metric "+metricName, []string{}, constLabels)
 			// and produce a metric
 			convertStatToMetric(data, k, "", description, prom, valueType)
 		}
