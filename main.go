@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+	"strings"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
-	"net/http"
-	"os"
 )
 
 var Version string
@@ -59,6 +61,12 @@ func main() {
 			Usage:  "The http scrape path",
 			EnvVar: "METRICS_PATH",
 		},
+		cli.StringSliceFlag{
+			Name:   "constLabel",
+			Value:  &cli.StringSlice{},
+			Usage:  "The additional labels to add to metrics, format is --constLabel label1=value1 --constLabel label2=value2",
+			EnvVar: "CONST_LABELS",
+		},
 	}
 	app.Action = appAction
 	// then start the application
@@ -77,11 +85,23 @@ func appAction(c *cli.Context) error {
 		log.Debug("Debug logging is enabled")
 	}
 
+	constLabels := make(prometheus.Labels)
+	for _, constLabel := range c.StringSlice("constLabel") {
+		split := strings.Split(constLabel, "=")
+		if len(split) < 2 {
+			// Invalid param
+			continue
+		}
+		constLabels[split[0]] = split[1]
+	}
+	initMetrics(constLabels)
+
 	// create a collector
 	collector, err := NewStatsCollector(c)
 	if err != nil {
 		return err
 	}
+
 	// and register it in prometheus API
 	prometheus.MustRegister(collector)
 
